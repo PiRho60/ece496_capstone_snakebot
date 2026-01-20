@@ -5,8 +5,12 @@
 
 // ========================= IMU (BNO08x) SETUP =========================
 
+#define BNO08X_CS   27
+#define BNO08X_INT  26
+#define BNO08X_RST  25  // connect to RST pin on the breakout (active low)
+
 // I2C IMU (Adafruit BNO08x breakout, addr 0x4A on ESP32 default I2C)
-Adafruit_BNO08x bno(55);
+Adafruit_BNO08x bno(BNO08X_RST);
 sh2_SensorValue_t imuVal;
 
 // Change for your location: east = +, west = - (Toronto ≈ -10)
@@ -17,6 +21,16 @@ static inline float wrap360(float d) {
   while (d < 0.0f)    d += 360.0f;
   while (d >= 360.0f) d -= 360.0f;
   return d;
+}
+
+void setReports() {
+  // 10,000 us = 10 ms = 100 Hz
+  // if (! bno.enableReport(SH2_ROTATION_VECTOR)) {
+  //   Serial.println("Could not enable game vector");
+  //   while (1) delay(10);
+  // }
+  bno.enableReport(SH2_MAGNETIC_FIELD_CALIBRATED, 10000);    // status 0..3
+  // (If CALIBRATED isn’t available in your headers, try SH2_MAGNETIC_FIELD)
 }
 
 // Wrap to [-180,180)
@@ -39,17 +53,34 @@ bool  g_filt_init    = false;
 // Initialize IMU
 void initIMU() {
   Serial.println("[DEBUG] initIMU() start");
-  Wire.begin(21, 22);  // SDA, SCL for ESP32
+  // Wire.begin(21, 22);  // SDA, SCL for ESP32
   Serial.println("Starting BNO08x...");
-  if (!bno.begin_I2C(0x4A, &Wire)) {
-    Serial.println("BNO08x not found");
-    while (1) { delay(10); }
+  // if (!bno.begin_I2C(0x4A, &Wire)) {
+  //   Serial.println("BNO08x not found");
+  //   while (1) { delay(10); }
+  // }
+  if (!bno.begin_SPI(BNO08X_CS, BNO08X_INT)) {
+    Serial.println("Failed to find BNO08x chip");
+    while (1) delay(10);
   }
 
   Serial.println("BNO08x found!");
 
+  for (int n = 0; n < bno.prodIds.numEntries; n++) {
+    Serial.print("Part ");
+    Serial.print(bno.prodIds.entry[n].swPartNumber);
+    Serial.print(": Version :");
+    Serial.print(bno.prodIds.entry[n].swVersionMajor);
+    Serial.print(".");
+    Serial.print(bno.prodIds.entry[n].swVersionMinor);
+    Serial.print(".");
+    Serial.print(bno.prodIds.entry[n].swVersionPatch);
+    Serial.print(" Build ");
+    Serial.println(bno.prodIds.entry[n].swBuildNumber);
+  }
+
   // Optional: set to Game Rotation Vector for headset-like orientation
-  bno.enableReport(SH2_ROTATION_VECTOR, 100000);  // 10 ms = 100 Hz
+  setReports();
   // Or use 100000 for 10 Hz, etc.
 
   // Small delay for stability
@@ -90,7 +121,7 @@ void updateHeadingFromIMU() {
       g_filt_init    = true;
     }
 
-    const float alpha = 0.1f;   // smoothing factor (0<alpha<=1), smaller = smoother
+    const float alpha = 1.0f;   // smoothing factor (0<alpha<=1), smaller = smoother
     // Filter the heading error (handles wrap-around properly)
     float err = wrap180(trueDeg - g_filt_heading);
     g_filt_heading = wrap360(g_filt_heading + alpha * err);
@@ -99,11 +130,11 @@ void updateHeadingFromIMU() {
     g_true_heading = g_filt_heading;
     g_have_heading = true;
 
-    Serial.print("Raw yaw: ");
-    Serial.print(yaw);
-    Serial.print(" deg, TRUE filtered heading: ");
-    Serial.print(g_true_heading);
-    Serial.println(" deg");
+    // Serial.print("Raw yaw: ");
+    // Serial.print(yaw);
+    // Serial.print(" deg, TRUE filtered heading: ");
+    // Serial.print(g_true_heading);
+    // Serial.println(" deg");
   }
 }
 
@@ -120,10 +151,13 @@ void updateHeadingFromIMU() {
 
 constexpr int NUM_SERVOS = 6;
 
-int servoPins[NUM_SERVOS] = {
-  13, 14, 16, 17, 18, 19
-};
 
+int servoPins[NUM_SERVOS] = {
+  15, 2, 0, 4, 16, 17
+};
+// int servoPins[NUM_SERVOS] = {
+//   13, 14, 16, 17, 18, 19
+// };
 
 Servo myServos[NUM_SERVOS];
 
@@ -306,7 +340,6 @@ void moveTowardsHeading(float target_true_deg, float tol_deg = 5.0f) {
   }
 }
 // ========================= SETUP / LOOP =========================
-
 void setup() {
   Serial.println("[DEBUG] setup() start");
   Serial.begin(115200);
@@ -320,25 +353,47 @@ void setup() {
 }
 
 void loop() {
+  // if (bno.wasReset()) {
+  //   setReports();
+  // }
+
+  // if (! bno.getSensorEvent(&imuVal)) {
+  //   return;
+  // }
+
   // 1. Get latest IMU sample (non-blocking)
   updateHeadingFromIMU();
-  Serial.println("[DEBUG] loop() start");
-  // Grab any new IMU sample (non-blocking)
-  Serial.println("Start Update");
-  // updateHeadingFromIMU();
-  Serial.println("Finish Update");
 
-  if (g_have_heading) {
-    Serial.print("TRUE heading: ");
-    Serial.print(g_true_heading);
-    Serial.println(" deg");
-  } else {
-    Serial.println("Waiting for IMU heading...");
+
+  // static uint32_t lastPrint = 0;
+  // if (millis() - lastPrint >= 2000) {
+  //   lastPrint = millis();
+  //   if (g_have_heading) {
+  //     Serial.print("TRUE heading: ");
+  //     Serial.print(g_true_heading);
+  //     Serial.println(" deg");
+  //   } else {
+  //     Serial.println("Waiting for IMU heading...");
+  //   }
+  // }
+
+  static uint32_t lastPrint = 0;
+  if (imuVal.sensorId == SH2_MAGNETIC_FIELD_CALIBRATED && millis() - lastPrint >= 2000) {
+  // if (millis() - lastPrint >= 2000) {
+    lastPrint = millis();
+    Serial.print("Mag status (0-3): ");
+    Serial.println(imuVal.status); // 0=unreliable, 3=high
+
+    Serial.print("mx,my,mz: ");
+    Serial.print(imuVal.un.magneticField.x); Serial.print(", ");
+    Serial.print(imuVal.un.magneticField.y); Serial.print(", ");
+    Serial.println(imuVal.un.magneticField.z);
   }
 
-  // Keep moving while trying to face 90° TRUE
-  moveTowardsHeading(355, 50.0f);
 
-  // 3. Advance the gait one tiny step
-  slitherStep();
+  // Keep moving while trying to face 90° TRUE
+  // moveTowardsHeading(355, 50.0f);
+
+  // // 3. Advance the gait one tiny step
+  // slitherStep();
 }
